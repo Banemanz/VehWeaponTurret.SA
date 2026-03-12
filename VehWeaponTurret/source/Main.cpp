@@ -3,6 +3,7 @@
 #include "CPad.h"
 #include "CTimer.h"
 #include "CWeapon.h"
+#include "CProjectile.h"
 #include "CProjectileInfo.h"
 #include "CPlayerPed.h"
 #include "CVehicle.h"
@@ -156,6 +157,24 @@ namespace VehicleWeaponINI {
             return 0;
         default:
             return 120;
+        }
+    }
+
+    static float GetProjectileVelocityScale(eWeaponType weaponType) {
+        switch (weaponType) {
+        case WEAPONTYPE_RLAUNCHER:
+        case WEAPONTYPE_RLAUNCHER_HS:
+            return 25.0f;
+        case WEAPONTYPE_GRENADE:
+            return 16.0f;
+        case WEAPONTYPE_MOLOTOV:
+            return 15.0f;
+        case WEAPONTYPE_TEARGAS:
+            return 14.0f;
+        case WEAPONTYPE_FREEFALL_BOMB:
+            return 10.0f;
+        default:
+            return 20.0f;
         }
     }
 
@@ -714,9 +733,46 @@ namespace VehicleWeaponINI {
         }
     }
 
+    static CProjectile* FindJustSpawnedProjectile(CEntity* creator, eWeaponType projectileType, const CVector& origin) {
+        CProjectile* bestProjectile = 0;
+        float bestDistSq = 99999999.0f;
+
+        for (unsigned int i = 0; i < MAX_PROJECTILE_INFOS; i++) {
+            CProjectileInfo* info = &gaProjectileInfo[i];
+            if (!info->m_bActive)
+                continue;
+
+            if (info->m_pCreator != creator)
+                continue;
+
+            if ((eWeaponType)info->m_nWeaponType != projectileType)
+                continue;
+
+            if (i >= MAX_PROJECTILES)
+                continue;
+
+            CProjectile* projectile = CProjectileInfo::ms_apProjectile[i];
+            if (!projectile)
+                continue;
+
+            CVector delta = projectile->GetPosition() - origin;
+            float distSq = delta.MagnitudeSqr();
+
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestProjectile = projectile;
+            }
+        }
+
+        return bestProjectile;
+    }
+
     static bool FireMountedProjectile(CEntity* creator, const VehicleWeaponConfig* cfg, const CVector& origin, const CVector& dir) {
         if (!creator || !cfg)
             return false;
+
+        eWeaponType weaponType = (eWeaponType)cfg->weaponType;
+        eWeaponType projectileType = GetProjectileSpawnType(weaponType);
 
         CVector launchDir = dir;
         if (launchDir.MagnitudeSqr() <= 0.0001f)
@@ -724,14 +780,35 @@ namespace VehicleWeaponINI {
 
         launchDir.Normalise();
 
-        return CProjectileInfo::AddProjectile(
+        bool spawned = CProjectileInfo::AddProjectile(
             creator,
-            GetProjectileSpawnType((eWeaponType)cfg->weaponType),
+            projectileType,
             origin,
             cfg->projectileForce,
             &launchDir,
             0
         );
+
+        if (!spawned)
+            return false;
+
+        CProjectile* projectile = FindJustSpawnedProjectile(creator, projectileType, origin);
+        if (!projectile)
+            return true;
+
+        projectile->SetPosn(origin);
+
+        if (weaponType == WEAPONTYPE_GRENADE ||
+            weaponType == WEAPONTYPE_MOLOTOV ||
+            weaponType == WEAPONTYPE_TEARGAS ||
+            weaponType == WEAPONTYPE_FREEFALL_BOMB ||
+            weaponType == WEAPONTYPE_RLAUNCHER ||
+            weaponType == WEAPONTYPE_RLAUNCHER_HS) {
+            projectile->m_vecMoveSpeed = launchDir * (cfg->projectileForce * GetProjectileVelocityScale(weaponType));
+            projectile->m_vecTurnSpeed.Zero();
+        }
+
+        return true;
     }
 
     static bool FireMountedWeapon(CPlayerPed* player, const VehicleWeaponConfig* cfg, const CVector& origin, const CVector& target, const CVector& dir) {
