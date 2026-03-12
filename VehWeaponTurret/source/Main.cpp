@@ -11,6 +11,7 @@
 #include "CCam.h"
 #include "eCamMode.h"
 #include "eEntityStatus.h"
+#include "eModelID.h"
 #include "RenderWare.h"
 
 #include <windows.h>
@@ -30,7 +31,8 @@ namespace VehicleWeaponINI {
 
     enum eAimMode {
         AIMMODE_FORWARD = 0,
-        AIMMODE_DOOM_TURRET = 1
+        AIMMODE_DOOM_TURRET = 1,
+        AIMMODE_TANK_TURRET = 2
     };
 
     enum eTriggerMode {
@@ -56,9 +58,12 @@ namespace VehicleWeaponINI {
         float fallbackZ;
         float muzzleStartOffset;
         float range;
+        int   fireDelayMs;
+        float projectileForce;
     };
 
     static VehicleWeaponConfig gConfigs[kMaxVehicleConfigs];
+    static unsigned int gLastFireTimes[kMaxVehicleConfigs];
     static int gConfigCount = 0;
     static char gIniPath[MAX_PATH] = { 0 };
 
@@ -116,6 +121,44 @@ namespace VehicleWeaponINI {
         return ReadIniInt(section, key, defaultValue ? 1 : 0) != 0;
     }
 
+    static float GetDefaultProjectileForce(eWeaponType weaponType) {
+        switch (weaponType) {
+        case WEAPONTYPE_RLAUNCHER:
+        case WEAPONTYPE_RLAUNCHER_HS:
+            return 0.30f;
+        case WEAPONTYPE_GRENADE:
+            return 0.22f;
+        case WEAPONTYPE_MOLOTOV:
+            return 0.20f;
+        case WEAPONTYPE_TEARGAS:
+            return 0.18f;
+        case WEAPONTYPE_FREEFALL_BOMB:
+            return 0.10f;
+        default:
+            return 0.20f;
+        }
+    }
+
+    static int GetDefaultFireDelay(eWeaponType weaponType) {
+        switch (weaponType) {
+        case WEAPONTYPE_RLAUNCHER:
+        case WEAPONTYPE_RLAUNCHER_HS:
+            return 900;
+        case WEAPONTYPE_GRENADE:
+        case WEAPONTYPE_MOLOTOV:
+        case WEAPONTYPE_TEARGAS:
+            return 700;
+        case WEAPONTYPE_MINIGUN:
+            return 40;
+        case WEAPONTYPE_FTHROWER:
+        case WEAPONTYPE_SPRAYCAN:
+        case WEAPONTYPE_EXTINGUISHER:
+            return 0;
+        default:
+            return 120;
+        }
+    }
+
     static void SetDefaultConfig(VehicleWeaponConfig& cfg) {
         cfg.enabled = false;
         cfg.vehicleModel = -1;
@@ -130,6 +173,8 @@ namespace VehicleWeaponINI {
         cfg.fallbackZ = 1.1f;
         cfg.muzzleStartOffset = 0.75f;
         cfg.range = 18.0f;
+        cfg.fireDelayMs = GetDefaultFireDelay((eWeaponType)cfg.weaponType);
+        cfg.projectileForce = GetDefaultProjectileForce((eWeaponType)cfg.weaponType);
     }
 
     static void WriteDefaultIni() {
@@ -148,6 +193,8 @@ namespace VehicleWeaponINI {
         WritePrivateProfileStringA("Vehicle0", "FallbackZ", "1.1", gIniPath);
         WritePrivateProfileStringA("Vehicle0", "MuzzleStartOffset", "0.75", gIniPath);
         WritePrivateProfileStringA("Vehicle0", "Range", "18.0", gIniPath);
+        WritePrivateProfileStringA("Vehicle0", "FireDelayMs", "0", gIniPath);
+        WritePrivateProfileStringA("Vehicle0", "ProjectileForce", "0.30", gIniPath);
 
         WritePrivateProfileStringA("Vehicle1", "Enabled", "1", gIniPath);
         WritePrivateProfileStringA("Vehicle1", "VehicleModel", "407", gIniPath);
@@ -162,11 +209,13 @@ namespace VehicleWeaponINI {
         WritePrivateProfileStringA("Vehicle1", "FallbackZ", "1.1", gIniPath);
         WritePrivateProfileStringA("Vehicle1", "MuzzleStartOffset", "0.75", gIniPath);
         WritePrivateProfileStringA("Vehicle1", "Range", "18.0", gIniPath);
+        WritePrivateProfileStringA("Vehicle1", "FireDelayMs", "0", gIniPath);
+        WritePrivateProfileStringA("Vehicle1", "ProjectileForce", "0.20", gIniPath);
 
         WritePrivateProfileStringA("Vehicle2", "Enabled", "1", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "VehicleModel", "432", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "WeaponType", "35", gIniPath);
-        WritePrivateProfileStringA("Vehicle2", "AimMode", "0", gIniPath);
+        WritePrivateProfileStringA("Vehicle2", "AimMode", "2", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "TriggerMode", "1", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "TriggerKeyVK", "0", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "Fireproof", "0", gIniPath);
@@ -174,8 +223,10 @@ namespace VehicleWeaponINI {
         WritePrivateProfileStringA("Vehicle2", "FallbackX", "0.0", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "FallbackY", "2.5", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "FallbackZ", "1.0", gIniPath);
-        WritePrivateProfileStringA("Vehicle2", "MuzzleStartOffset", "1.0", gIniPath);
+        WritePrivateProfileStringA("Vehicle2", "MuzzleStartOffset", "0.0", gIniPath);
         WritePrivateProfileStringA("Vehicle2", "Range", "80.0", gIniPath);
+        WritePrivateProfileStringA("Vehicle2", "FireDelayMs", "900", gIniPath);
+        WritePrivateProfileStringA("Vehicle2", "ProjectileForce", "0.30", gIniPath);
     }
 
     static void LoadConfig() {
@@ -204,6 +255,8 @@ namespace VehicleWeaponINI {
             cfg.fallbackZ = ReadIniFloat(section, "FallbackZ", 1.1f);
             cfg.muzzleStartOffset = ReadIniFloat(section, "MuzzleStartOffset", 0.75f);
             cfg.range = ReadIniFloat(section, "Range", 18.0f);
+            cfg.fireDelayMs = ReadIniInt(section, "FireDelayMs", GetDefaultFireDelay((eWeaponType)cfg.weaponType));
+            cfg.projectileForce = ReadIniFloat(section, "ProjectileForce", GetDefaultProjectileForce((eWeaponType)cfg.weaponType));
 
             if (!cfg.enabled)
                 continue;
@@ -211,17 +264,20 @@ namespace VehicleWeaponINI {
             if (cfg.vehicleModel < 0)
                 continue;
 
-            if (gConfigCount < kMaxVehicleConfigs)
-                gConfigs[gConfigCount++] = cfg;
+            if (gConfigCount < kMaxVehicleConfigs) {
+                gConfigs[gConfigCount] = cfg;
+                gLastFireTimes[gConfigCount] = 0;
+                gConfigCount++;
+            }
         }
     }
 
-    static const VehicleWeaponConfig* FindVehicleConfig(int modelId) {
+    static int FindVehicleConfigIndex(int modelId) {
         for (int i = 0; i < gConfigCount; i++) {
             if (gConfigs[i].vehicleModel == modelId)
-                return &gConfigs[i];
+                return i;
         }
-        return 0;
+        return -1;
     }
 
     static void EnsureWeaponType(int weaponType) {
@@ -301,6 +357,23 @@ namespace VehicleWeaponINI {
         return false;
     }
 
+    static bool CanFireNow(int configIndex) {
+        if (configIndex < 0 || configIndex >= gConfigCount)
+            return false;
+
+        const VehicleWeaponConfig& cfg = gConfigs[configIndex];
+        unsigned int now = CTimer::m_snTimeInMilliseconds;
+
+        if (cfg.fireDelayMs <= 0)
+            return true;
+
+        if (now - gLastFireTimes[configIndex] < (unsigned int)cfg.fireDelayMs)
+            return false;
+
+        gLastFireTimes[configIndex] = now;
+        return true;
+    }
+
     static CVector TransformLocalToWorld(CVehicle* vehicle, const CVector& local) {
         return vehicle->GetPosition()
             + vehicle->GetRight() * local.x
@@ -344,7 +417,10 @@ namespace VehicleWeaponINI {
                 std::sqrt(frontLocal.x * frontLocal.x + frontLocal.y * frontLocal.y)
             );
 
-            targetPitch += 22.0f * kDegToRad;
+            if (automobile->m_nModelIndex == MODEL_SWATVAN)
+                targetPitch += 22.0f * kDegToRad;
+            else
+                targetPitch += 15.0f * kDegToRad;
 
             if (targetYaw > automobile->m_fDoomVerticalRotation + kPiF)
                 targetYaw -= kTwoPiF;
@@ -378,65 +454,213 @@ namespace VehicleWeaponINI {
 
         automobile->m_fDoomVerticalRotation = WrapAngle(automobile->m_fDoomVerticalRotation);
 
-        automobile->m_fDoomHorizontalRotation = ClampFloat(
-            automobile->m_fDoomHorizontalRotation,
-            -10.0f * kDegToRad,
-            35.0f * kDegToRad
-        );
+        if (automobile->m_nModelIndex == MODEL_SWATVAN) {
+            automobile->m_fDoomHorizontalRotation = ClampFloat(
+                automobile->m_fDoomHorizontalRotation,
+                -10.0f * kDegToRad,
+                35.0f * kDegToRad
+            );
+        }
+        else {
+            automobile->m_fDoomHorizontalRotation = ClampFloat(
+                automobile->m_fDoomHorizontalRotation,
+                -20.0f * kDegToRad,
+                20.0f * kDegToRad
+            );
+        }
     }
 
-    static bool GetForwardAimMuzzleAndTarget(CVehicle* vehicle, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget) {
+    static void UpdateTankTurretAim(CAutomobile* automobile, CPad* pad) {
+        if (!automobile || !pad)
+            return;
+
+        CCam& activeCam = TheCamera.m_aCams[TheCamera.m_nActiveCam];
+
+        if (activeCam.m_nMode != MODE_CAM_ON_A_STRING) {
+            automobile->m_fDoomVerticalRotation -=
+                ((float)GetCarGunLeftRight(pad) * CTimer::ms_fTimeStep * 0.015f) / 128.0f;
+
+            automobile->m_fDoomHorizontalRotation +=
+                ((float)GetCarGunUpDown(pad) * CTimer::ms_fTimeStep * 0.005f) / 128.0f;
+        }
+        else {
+            CVector frontLocal = TransformWorldDirToLocal(automobile, activeCam.m_vecFront);
+
+            float targetYaw = std::atan2(-frontLocal.x, frontLocal.y);
+            float targetPitch = std::atan2(
+                frontLocal.z,
+                std::sqrt(frontLocal.x * frontLocal.x + frontLocal.y * frontLocal.y)
+            ) + 15.0f * kDegToRad;
+
+            if (targetYaw < automobile->m_fDoomVerticalRotation - kPiF)
+                targetYaw += kTwoPiF;
+            else if (targetYaw > automobile->m_fDoomVerticalRotation + kPiF)
+                targetYaw -= kTwoPiF;
+
+            {
+                float yawDiff = targetYaw - automobile->m_fDoomVerticalRotation;
+                float yawStep = CTimer::ms_fTimeStep * 0.015f;
+
+                if (yawDiff < -yawStep)
+                    automobile->m_fDoomVerticalRotation -= yawStep;
+                else if (yawDiff > yawStep)
+                    automobile->m_fDoomVerticalRotation += yawStep;
+                else
+                    automobile->m_fDoomVerticalRotation = targetYaw;
+            }
+
+            {
+                float pitchDiff = targetPitch - automobile->m_fDoomHorizontalRotation;
+                float pitchStep = CTimer::ms_fTimeStep * 0.005f;
+
+                if (pitchDiff > pitchStep)
+                    automobile->m_fDoomHorizontalRotation += pitchStep;
+                else if (pitchDiff >= -pitchStep)
+                    automobile->m_fDoomHorizontalRotation = targetPitch;
+                else
+                    automobile->m_fDoomHorizontalRotation -= pitchStep;
+            }
+        }
+
+        if (automobile->m_fDoomVerticalRotation > kPiF)
+            automobile->m_fDoomVerticalRotation -= kTwoPiF;
+        else if (automobile->m_fDoomVerticalRotation < -kPiF)
+            automobile->m_fDoomVerticalRotation += kTwoPiF;
+
+        {
+            const float maxPitch = 35.0f * kDegToRad;
+            const float minPitch = -7.0f * kDegToRad;
+
+            if (automobile->m_fDoomHorizontalRotation > maxPitch) {
+                automobile->m_fDoomHorizontalRotation = maxPitch;
+            }
+            else if (automobile->m_fDoomVerticalRotation > 90.0f * kDegToRad ||
+                automobile->m_fDoomVerticalRotation < -90.0f * kDegToRad) {
+                float cosYaw = std::cos(automobile->m_fDoomVerticalRotation) * 1.3f;
+                float limitPitch = -(3.0f * kDegToRad);
+
+                if (cosYaw >= -1.0f)
+                    limitPitch = minPitch - cosYaw * (limitPitch - minPitch);
+
+                if (limitPitch > automobile->m_fDoomHorizontalRotation)
+                    automobile->m_fDoomHorizontalRotation = limitPitch;
+            }
+            else if (automobile->m_fDoomHorizontalRotation < minPitch) {
+                automobile->m_fDoomHorizontalRotation = minPitch;
+            }
+        }
+    }
+
+    static bool GetForwardAimData(CVehicle* vehicle, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget, CVector& outDir) {
         if (!vehicle || !cfg)
             return false;
 
-        CVector worldDir = vehicle->GetForward();
-        worldDir.Normalise();
+        outDir = vehicle->GetForward();
+        outDir.Normalise();
 
-        CVector base = TransformLocalToWorld(vehicle, CVector(cfg->fallbackX, cfg->fallbackY, cfg->fallbackZ));
-
-        outOrigin = base + worldDir * cfg->muzzleStartOffset;
-        outTarget = outOrigin + worldDir * cfg->range;
+        outOrigin = TransformLocalToWorld(vehicle, CVector(cfg->fallbackX, cfg->fallbackY, cfg->fallbackZ));
+        outOrigin += outDir * cfg->muzzleStartOffset;
+        outTarget = outOrigin + outDir * cfg->range;
 
         return true;
     }
 
-    static bool GetDoomTurretMuzzleAndTarget(CAutomobile* automobile, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget) {
+    static bool GetDoomTurretAimData(CAutomobile* automobile, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget, CVector& outDir) {
         if (!automobile || !cfg)
             return false;
 
-        CVector turretBase;
-        bool hasMiscA = cfg->useMiscA && automobile->m_aCarNodes[CAR_MISC_A] != 0;
-
-        if (hasMiscA) {
+        CVector start;
+        if (automobile->m_aCarNodes[CAR_MISC_A]) {
             RwMatrix* miscMatrix = RwFrameGetLTM(automobile->m_aCarNodes[CAR_MISC_A]);
             if (!miscMatrix)
                 return false;
 
-            turretBase = *reinterpret_cast<CVector*>(RwMatrixGetPos(miscMatrix));
+            start = *reinterpret_cast<CVector*>(RwMatrixGetPos(miscMatrix));
         }
         else {
-            turretBase = TransformLocalToWorld(automobile, CVector(cfg->fallbackX, cfg->fallbackY, cfg->fallbackZ));
+            start = TransformLocalToWorld(automobile, CVector(0.0f, 1.5f, 1.8f));
         }
 
-        float yaw = automobile->m_fDoomVerticalRotation;
-        float pitch = automobile->m_fDoomHorizontalRotation;
-
-        CVector localDir(
-            -(std::sin(yaw) * std::cos(pitch)),
-            (std::cos(yaw) * std::cos(pitch)),
-            std::sin(pitch)
+        CVector point(
+            -(std::sin(automobile->m_fDoomVerticalRotation) * std::cos(automobile->m_fDoomHorizontalRotation)),
+            (std::cos(automobile->m_fDoomVerticalRotation) * std::cos(automobile->m_fDoomHorizontalRotation)),
+            std::sin(automobile->m_fDoomHorizontalRotation)
         );
+        point = TransformLocalDirToWorld(automobile, point);
 
-        CVector worldDir = TransformLocalDirToWorld(automobile, localDir);
-        worldDir.Normalise();
+        if (automobile->m_aCarNodes[CAR_MISC_A]) {
+            if (automobile->m_nModelIndex == MODEL_SWATVAN)
+                start += point * 2.0f;
+            else
+                start += point * 1.2f;
 
-        outOrigin = turretBase + worldDir * cfg->muzzleStartOffset;
-        outTarget = outOrigin + worldDir * cfg->range;
+            start += automobile->GetSpeed(start - automobile->GetPosition()) * CTimer::ms_fTimeStep;
+        }
+
+        CVector end = start + point * cfg->range;
+        CWeapon::DoDoomAiming(automobile, &start, &end);
+
+        outDir = end - start;
+        if (outDir.MagnitudeSqr() <= 0.0001f)
+            return false;
+
+        outDir.Normalise();
+        outOrigin = start + outDir * cfg->muzzleStartOffset;
+        outTarget = end;
 
         return true;
     }
 
-    static bool GetMuzzleAndTarget(CVehicle* vehicle, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget) {
+    static bool GetTankTurretAimData(CAutomobile* automobile, CPlayerPed* player, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget, CVector& outDir) {
+        if (!automobile || !player || !cfg)
+            return false;
+
+        CVector point;
+        point.x = std::sin(-automobile->m_fDoomVerticalRotation);
+        point.y = std::cos(automobile->m_fDoomVerticalRotation);
+        point.z = std::sin(automobile->m_fDoomHorizontalRotation);
+        point = TransformLocalDirToWorld(automobile, point);
+
+        CVector start;
+        if (automobile->m_aCarNodes[CAR_MISC_C]) {
+            RwMatrix* miscMatrix = RwFrameGetLTM(automobile->m_aCarNodes[CAR_MISC_C]);
+            if (!miscMatrix)
+                return false;
+
+            start = *reinterpret_cast<CVector*>(RwMatrixGetPos(miscMatrix));
+            start += automobile->GetSpeed(start - automobile->GetPosition()) * CTimer::ms_fTimeStep;
+        }
+        else {
+            const CVector tankShotDoomPos(0.0f, 1.21f, 1.05f);
+            const CVector tankShotDoomDefaultTarget(0.0f, 2.95f, 2.97f);
+            const CVector dist = tankShotDoomDefaultTarget - tankShotDoomPos;
+
+            float sinYaw = std::sin(automobile->m_fDoomVerticalRotation);
+            float cosYaw = std::cos(automobile->m_fDoomVerticalRotation);
+
+            CVector doomOffset;
+            doomOffset.x = tankShotDoomPos.x + cosYaw * dist.x - sinYaw * dist.y;
+            doomOffset.y = tankShotDoomPos.y + cosYaw * dist.y + sinYaw * dist.x;
+            doomOffset.z = tankShotDoomPos.z + dist.z - 1.0f;
+
+            start = (*automobile->m_matrix) * doomOffset;
+        }
+
+        CVector end = start + point * cfg->range;
+        CWeapon::DoTankDoomAiming(automobile, player, &start, &end);
+
+        outDir = end - start;
+        if (outDir.MagnitudeSqr() <= 0.0001f)
+            return false;
+
+        outDir.Normalise();
+        outOrigin = start + outDir * cfg->muzzleStartOffset;
+        outTarget = end;
+
+        return true;
+    }
+
+    static bool GetAimData(CVehicle* vehicle, CPlayerPed* player, const VehicleWeaponConfig* cfg, CVector& outOrigin, CVector& outTarget, CVector& outDir) {
         if (!vehicle || !cfg)
             return false;
 
@@ -444,10 +668,17 @@ namespace VehicleWeaponINI {
             if (vehicle->m_nVehicleSubClass != VEHICLE_AUTOMOBILE)
                 return false;
 
-            return GetDoomTurretMuzzleAndTarget(static_cast<CAutomobile*>(vehicle), cfg, outOrigin, outTarget);
+            return GetDoomTurretAimData(static_cast<CAutomobile*>(vehicle), cfg, outOrigin, outTarget, outDir);
         }
 
-        return GetForwardAimMuzzleAndTarget(vehicle, cfg, outOrigin, outTarget);
+        if (cfg->aimMode == AIMMODE_TANK_TURRET) {
+            if (vehicle->m_nVehicleSubClass != VEHICLE_AUTOMOBILE)
+                return false;
+
+            return GetTankTurretAimData(static_cast<CAutomobile*>(vehicle), player, cfg, outOrigin, outTarget, outDir);
+        }
+
+        return GetForwardAimData(vehicle, cfg, outOrigin, outTarget, outDir);
     }
 
     static bool IsProjectileWeaponType(eWeaponType weaponType) {
@@ -483,56 +714,34 @@ namespace VehicleWeaponINI {
         }
     }
 
-    static float GetProjectileForce(eWeaponType weaponType) {
-        switch (weaponType) {
-        case WEAPONTYPE_RLAUNCHER:
-        case WEAPONTYPE_RLAUNCHER_HS:
-            return 0.30f;
-        case WEAPONTYPE_GRENADE:
-            return 0.22f;
-        case WEAPONTYPE_MOLOTOV:
-            return 0.20f;
-        case WEAPONTYPE_TEARGAS:
-            return 0.18f;
-        case WEAPONTYPE_FREEFALL_BOMB:
-            return 0.10f;
-        default:
-            return 0.20f;
-        }
-    }
-
-    static bool FireMountedProjectile(CEntity* firingEntity, eWeaponType weaponType, const CVector& origin, const CVector& target) {
-        if (!firingEntity)
+    static bool FireMountedProjectile(CEntity* creator, const VehicleWeaponConfig* cfg, const CVector& origin, const CVector& dir) {
+        if (!creator || !cfg)
             return false;
 
-        CVector dir = target - origin;
-        float dirLen = dir.Magnitude();
-        if (dirLen <= 0.001f)
+        CVector launchDir = dir;
+        if (launchDir.MagnitudeSqr() <= 0.0001f)
             return false;
 
-        dir /= dirLen;
-
-        eWeaponType projectileType = GetProjectileSpawnType(weaponType);
-        float force = GetProjectileForce(weaponType);
+        launchDir.Normalise();
 
         return CProjectileInfo::AddProjectile(
-            firingEntity,
-            projectileType,
+            creator,
+            GetProjectileSpawnType((eWeaponType)cfg->weaponType),
             origin,
-            force,
-            &dir,
+            cfg->projectileForce,
+            &launchDir,
             0
         );
     }
 
-    static bool FireMountedWeapon(CPlayerPed* player, CVehicle* vehicle, const VehicleWeaponConfig* cfg, const CVector& origin, const CVector& target) {
-        if (!player || !vehicle || !cfg)
+    static bool FireMountedWeapon(CPlayerPed* player, const VehicleWeaponConfig* cfg, const CVector& origin, const CVector& target, const CVector& dir) {
+        if (!player || !cfg)
             return false;
 
         eWeaponType weaponType = (eWeaponType)cfg->weaponType;
 
         if (IsProjectileWeaponType(weaponType))
-            return FireMountedProjectile(vehicle, weaponType, origin, target);
+            return FireMountedProjectile(player, cfg, origin, dir);
 
         return gWeapon.Fire(
             player,
@@ -573,11 +782,13 @@ namespace VehicleWeaponINI {
                 return;
             }
 
-            const VehicleWeaponConfig* cfg = FindVehicleConfig(vehicle->m_nModelIndex);
-            if (!cfg) {
+            int configIndex = FindVehicleConfigIndex(vehicle->m_nModelIndex);
+            if (configIndex < 0) {
                 StopWeaponEffect();
                 return;
             }
+
+            VehicleWeaponConfig* cfg = &gConfigs[configIndex];
 
             EnsureWeaponType(cfg->weaponType);
             gWeapon.Update(player);
@@ -598,21 +809,29 @@ namespace VehicleWeaponINI {
                 if (vehicle->m_nVehicleSubClass == VEHICLE_AUTOMOBILE)
                     UpdateDoomTurretAim(static_cast<CAutomobile*>(vehicle), pad);
             }
+            else if (cfg->aimMode == AIMMODE_TANK_TURRET) {
+                if (vehicle->m_nVehicleSubClass == VEHICLE_AUTOMOBILE)
+                    UpdateTankTurretAim(static_cast<CAutomobile*>(vehicle), pad);
+            }
 
             if (!IsTriggerPressed(cfg, pad)) {
                 StopWeaponEffect();
                 return;
             }
 
+            if (!CanFireNow(configIndex))
+                return;
+
             CVector origin;
             CVector target;
+            CVector dir;
 
-            if (!GetMuzzleAndTarget(vehicle, cfg, origin, target)) {
+            if (!GetAimData(vehicle, player, cfg, origin, target, dir)) {
                 StopWeaponEffect();
                 return;
             }
 
-            FireMountedWeapon(player, vehicle, cfg, origin, target);
+            FireMountedWeapon(player, cfg, origin, target, dir);
         }
     };
 
